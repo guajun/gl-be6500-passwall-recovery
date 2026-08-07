@@ -1,0 +1,114 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+CONFIG_FILE="${CONFIG_FILE:-/etc/default/passwall-cloud-direct-client}"
+if [[ -r "$CONFIG_FILE" ]]; then
+  # shellcheck source=/dev/null
+  source "$CONFIG_FILE"
+fi
+
+SLOT="${SLOT:-}"
+ROUTER_HOST="${ROUTER_HOST:-10.244.71.148}"
+ROUTER_PORT="${ROUTER_PORT:-22}"
+IDENTITY_FILE="${IDENTITY_FILE:-/etc/passwall-cloud-direct-client/id_ed25519}"
+KNOWN_HOSTS_FILE="${KNOWN_HOSTS_FILE:-/etc/passwall-cloud-direct-client/known_hosts}"
+PUBLIC_IP_URL="${PUBLIC_IP_URL:-}"
+SSH_CONNECT_TIMEOUT="${SSH_CONNECT_TIMEOUT:-10}"
+RETRIES="${RETRIES:-6}"
+RETRY_DELAY="${RETRY_DELAY:-20}"
+
+log() {
+  printf 'passwall-cloud-direct-client: %s\n' "$*"
+}
+
+die() {
+  log "ERROR: $*" >&2
+  exit 1
+}
+
+valid_ipv4() {
+  local ip="$1" octet
+  [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 1
+  IFS=. read -r -a octets <<< "$ip"
+  for octet in "${octets[@]}"; do
+    ((10#$octet >= 0 && 10#$octet <= 255)) || return 1
+  done
+}
+
+fetch_url() {
+  curl --fail --silent --show-error --location --max-time 5 "$1" 2>/dev/null || true
+}
+
+discover_public_ipv4() {
+  local token ip url
+
+  token="$(curl --fail --silent --show-error --max-time 2 \
+    -X PUT -H 'X-aliyun-ecs-metadata-token-ttl-seconds: 60' \
+    http://100.100.100.200/latest/api/token 2>/dev/null || true)"
+  if [[ -n "$token" ]]; then
+    ip="$(curl --fail --silent --show-error --max-time 2 \
+      -H "X-aliyun-ecs-metadata-token: $token" \
+      http://100.100.100.200/latest/meta-data/eipv4 2>/dev/null || true)"
+    ip="${ip//$'\r'/}"
+    ip="${ip//$'\n'/}"
+    if valid_ipv4 "$ip"; then
+      printf '%s\n' "$ip"
+      return 0
+    fi
+  fi
+
+  if [[ -n "$PUBLIC_IP_URL" ]]; then
+    ip="$(fetch_url "$PUBLIC_IP_URL")"
+    ip="${ip//$'\r'/}"
+    ip="${ip//$'\n'/}"
+    if valid_ipv4 "$ip"; then
+      printf '%s\n' "$ip"
+      return 0
+    fi
+  fi
+
+  for url in https://api.ipify.org https://checkip.amazonaws.com; do
+    ip="$(fetch_url "$url")"
+    ip="${ip//$'\r'/}"
+    ip="${ip//$'\n'/}"
+    if valid_ipv4 "$ip"; then
+      printf '%s\n' "$ip"
+      return 0
+    fi
+  done
+  return 1
+}
+
+register_once() {
+  local public_ip="$1"
+
+  ssh -T \
+    -i "$IDENTITY_FILE" \
+    -p "$ROUTER_PORT" \
+    -o BatchMode=yes \
+    -o ConnectTimeout="$SSH_CONNECT_TIMEOUT" \
+    -o IdentitiesOnly=yes \
+    -o StrictHostKeyChecking=yes \
+    -o UserKnownHostsFile="$KNOWN_HOSTS_FILE" \
+    "root@$ROUTER_HOST" "lease $public_ip"
+}
+
+[[ "$SLOT" =~ ^[a-z0-9][a-z0-9_-]*$ ]] || die "SLOT is missing or invalid"
+[[ -r "$IDENTITY_FILE" ]] || die "identity file is missing: $IDENTITY_FILE"
+[[ -r "$KNOWN_HOSTS_FILE" ]] || die "known_hosts file is missing: $KNOWN_HOSTS_FILE"
+command -v curl >/dev/null 2>&1 || die "curl is required"
+command -v ssh >/dev/null 2>&1 || die "OpenSSH client is required"
+
+public_ip="$(discover_public_ipv4)" || die "could not determine public IPv4 address"
+
+for ((attempt = 1; attempt <= RETRIES; attempt++)); do
+  if output="$(register_once "$public_ip" 2>&1)"; then
+    log "$output"
+    exit 0
+  fi
+  log "registration attempt $attempt/$RETRIES failed: $output"
+  ((attempt == RETRIES)) || sleep "$RETRY_DELAY"
+done
+
+die "router lease registration failed"

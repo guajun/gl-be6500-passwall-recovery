@@ -1,0 +1,12 @@
+[Unit]
+Description=Periodically renew this cloud host's PassWall direct-routing lease
+
+[Timer]
+OnBootSec=45s
+OnUnitActiveSec=5min
+RandomizedDelaySec=30s
+Persistent=true
+Unit=passwall-cloud-direct-client.service
+
+[Install]
+WantedBy=timers.target

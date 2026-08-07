@@ -1,0 +1,283 @@
+#!/bin/sh
+
+set -u
+
+STATE_DIR="${STATE_DIR:-/tmp/passwall-cloud-direct/leases}"
+LOCK_DIR="${LOCK_DIR:-/var/lock/passwall-cloud-direct.lock}"
+SET_NAME="${SET_NAME:-pwr_cloud_direct}"
+LEASE_SECONDS="${LEASE_SECONDS:-7200}"
+SYNC_INTERVAL="${SYNC_INTERVAL:-15}"
+IPSET_BIN="${IPSET_BIN:-ipset}"
+IPTABLES_BIN="${IPTABLES_BIN:-iptables}"
+TAG="passwall-cloud-direct"
+RULE_COMMENT="passwall-cloud-direct"
+
+log() {
+    logger -t "$TAG" "$*" 2>/dev/null || true
+}
+
+die() {
+    log "ERROR: $*"
+    printf '%s\n' "$TAG: ERROR: $*" >&2
+    exit 1
+}
+
+valid_slot() {
+    case "$1" in
+        ''|*[!a-z0-9_-]*) return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
+valid_ipv4() {
+    local ip="$1" old_ifs="$IFS" octet count=0
+
+    case "$ip" in
+        ''|*[!0-9.]*) return 1 ;;
+    esac
+
+    IFS=.
+    set -- $ip
+    IFS="$old_ifs"
+    [ "$#" -eq 4 ] || return 1
+
+    for octet in "$@"; do
+        [ -n "$octet" ] || return 1
+        [ "$octet" -ge 0 ] 2>/dev/null || return 1
+        [ "$octet" -le 255 ] 2>/dev/null || return 1
+        count=$((count + 1))
+    done
+    [ "$count" -eq 4 ]
+}
+
+valid_public_ipv4() {
+    local ip="$1" old_ifs="$IFS" first second
+
+    valid_ipv4 "$ip" || return 1
+    IFS=.
+    set -- $ip
+    IFS="$old_ifs"
+    first="$1"
+    second="$2"
+
+    case "$first" in
+        0|10|127) return 1 ;;
+    esac
+    [ "$first" -lt 224 ] || return 1
+    [ "$first" -eq 100 ] && [ "$second" -ge 64 ] && [ "$second" -le 127 ] && return 1
+    [ "$first" -eq 169 ] && [ "$second" -eq 254 ] && return 1
+    [ "$first" -eq 172 ] && [ "$second" -ge 16 ] && [ "$second" -le 31 ] && return 1
+    [ "$first" -eq 192 ] && [ "$second" -eq 168 ] && return 1
+    [ "$first" -eq 198 ] && { [ "$second" -eq 18 ] || [ "$second" -eq 19 ]; } && return 1
+    return 0
+}
+
+acquire_lock() {
+    local attempt=0
+    while ! mkdir "$LOCK_DIR" 2>/dev/null; do
+        attempt=$((attempt + 1))
+        [ "$attempt" -lt 20 ] || die "could not acquire lock"
+        sleep 1
+    done
+    trap 'rmdir "$LOCK_DIR" 2>/dev/null' EXIT HUP INT TERM
+}
+
+release_lock() {
+    rmdir "$LOCK_DIR" 2>/dev/null || true
+    trap - EXIT HUP INT TERM
+}
+
+chain_exists() {
+    "$IPTABLES_BIN" -w 5 -t "$1" -nL "$2" >/dev/null 2>&1
+}
+
+ensure_rule() {
+    local table="$1" chain="$2"
+
+    chain_exists "$table" "$chain" || return 0
+    "$IPTABLES_BIN" -w 5 -t "$table" -C "$chain" \
+        -m set --match-set "$SET_NAME" dst \
+        -m comment --comment "$RULE_COMMENT" -j RETURN >/dev/null 2>&1 ||
+        "$IPTABLES_BIN" -w 5 -t "$table" -I "$chain" 1 \
+            -m set --match-set "$SET_NAME" dst \
+            -m comment --comment "$RULE_COMMENT" -j RETURN
+}
+
+delete_rule() {
+    local table="$1" chain="$2"
+
+    chain_exists "$table" "$chain" || return 0
+    while "$IPTABLES_BIN" -w 5 -t "$table" -C "$chain" \
+        -m set --match-set "$SET_NAME" dst \
+        -m comment --comment "$RULE_COMMENT" -j RETURN >/dev/null 2>&1; do
+        "$IPTABLES_BIN" -w 5 -t "$table" -D "$chain" \
+            -m set --match-set "$SET_NAME" dst \
+            -m comment --comment "$RULE_COMMENT" -j RETURN || break
+    done
+}
+
+sync_unlocked() {
+    local now mtime age slot_file ip active_file
+
+    mkdir -p "$STATE_DIR" || return 1
+    now="${NOW:-$(date +%s)}"
+    active_file="$STATE_DIR/.active.$$"
+    : > "$active_file" || return 1
+
+    for slot_file in "$STATE_DIR"/*; do
+        [ -f "$slot_file" ] || continue
+        ip="$(sed -n '1p' "$slot_file" 2>/dev/null)"
+        if ! valid_public_ipv4 "$ip"; then
+            rm -f "$slot_file"
+            continue
+        fi
+        mtime="$(date -r "$slot_file" +%s 2>/dev/null || printf '0')"
+        age=$((now - mtime))
+        if [ "$age" -lt 0 ] || [ "$age" -le "$LEASE_SECONDS" ]; then
+            printf '%s\n' "$ip" >> "$active_file"
+        else
+            log "lease expired: $(basename "$slot_file") ($ip)"
+            rm -f "$slot_file"
+        fi
+    done
+
+    "$IPSET_BIN" create "$SET_NAME" hash:ip family inet hashsize 64 maxelem 32 -exist || {
+        rm -f "$active_file"
+        return 1
+    }
+    "$IPSET_BIN" flush "$SET_NAME" || {
+        rm -f "$active_file"
+        return 1
+    }
+    while IFS= read -r ip; do
+        if [ -n "$ip" ]; then
+            "$IPSET_BIN" add "$SET_NAME" "$ip" -exist || {
+                rm -f "$active_file"
+                return 1
+            }
+        fi
+    done < "$active_file"
+    rm -f "$active_file"
+
+    ensure_rule nat PSW || return 1
+    ensure_rule nat PSW_OUTPUT || return 1
+    ensure_rule mangle PSW || return 1
+    ensure_rule mangle PSW_OUTPUT || return 1
+}
+
+sync_rules() {
+    local status
+
+    acquire_lock
+    sync_unlocked
+    status=$?
+    release_lock
+    return "$status"
+}
+
+register_lease() {
+    local slot="$1" ip="$2" temporary
+
+    valid_slot "$slot" || die "invalid slot"
+    valid_public_ipv4 "$ip" || die "invalid public IPv4 address"
+    acquire_lock
+    mkdir -p "$STATE_DIR" || die "cannot create state directory"
+    temporary="$STATE_DIR/.${slot}.$$"
+    printf '%s\n' "$ip" > "$temporary" || die "cannot write lease"
+    chmod 0600 "$temporary" || die "cannot protect lease"
+    mv "$temporary" "$STATE_DIR/$slot" || die "cannot activate lease"
+    sync_unlocked || die "could not apply PassWall direct rules"
+    release_lock
+    log "lease registered: $slot ($ip)"
+    printf '%s\n' "registered $slot $ip"
+}
+
+clear_lease() {
+    local slot="$1"
+
+    valid_slot "$slot" || die "invalid slot"
+    acquire_lock
+    rm -f "$STATE_DIR/$slot"
+    sync_unlocked || die "could not apply PassWall direct rules"
+    release_lock
+    log "lease cleared: $slot"
+    printf '%s\n' "cleared $slot"
+}
+
+authorized_command() {
+    local slot="$1" original="${SSH_ORIGINAL_COMMAND:-}" ip
+
+    valid_slot "$slot" || die "invalid authorized slot"
+    case "$original" in
+        lease\ *)
+            ip="${original#lease }"
+            case "$ip" in
+                *' '*) die "invalid lease command" ;;
+            esac
+            register_lease "$slot" "$ip"
+            ;;
+        clear)
+            clear_lease "$slot"
+            ;;
+        *)
+            die "only 'lease IPv4' or 'clear' is allowed"
+            ;;
+    esac
+}
+
+show_status() {
+    local now slot_file ip mtime age remaining
+
+    now="$(date +%s)"
+    printf '%-12s %-15s %s\n' SLOT IPV4 REMAINING_SECONDS
+    for slot_file in "$STATE_DIR"/*; do
+        [ -f "$slot_file" ] || continue
+        ip="$(sed -n '1p' "$slot_file" 2>/dev/null)"
+        mtime="$(date -r "$slot_file" +%s 2>/dev/null || printf '0')"
+        age=$((now - mtime))
+        remaining=$((LEASE_SECONDS - age))
+        [ "$remaining" -ge 0 ] || remaining=0
+        printf '%-12s %-15s %s\n' "$(basename "$slot_file")" "$ip" "$remaining"
+    done
+}
+
+cleanup_rules() {
+    acquire_lock
+    delete_rule nat PSW
+    delete_rule nat PSW_OUTPUT
+    delete_rule mangle PSW
+    delete_rule mangle PSW_OUTPUT
+    "$IPSET_BIN" destroy "$SET_NAME" >/dev/null 2>&1 || true
+    release_lock
+}
+
+daemon() {
+    trap 'exit 0' HUP INT TERM
+    while true; do
+        sync_rules || log "rule synchronization failed"
+        sleep "$SYNC_INTERVAL" &
+        wait $!
+    done
+}
+
+case "${1:-}" in
+    sync) sync_rules ;;
+    register)
+        [ "$#" -eq 3 ] || die "usage: $0 register SLOT IPv4"
+        register_lease "$2" "$3"
+        ;;
+    clear)
+        [ "$#" -eq 2 ] || die "usage: $0 clear SLOT"
+        clear_lease "$2"
+        ;;
+    authorized)
+        [ "$#" -eq 2 ] || die "usage: $0 authorized SLOT"
+        authorized_command "$2"
+        ;;
+    status) show_status ;;
+    cleanup) cleanup_rules ;;
+    daemon) daemon ;;
+    *)
+        die "usage: $0 {sync|register SLOT IPv4|clear SLOT|authorized SLOT|status|cleanup|daemon}"
+        ;;
+esac

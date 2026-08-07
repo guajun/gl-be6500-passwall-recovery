@@ -1,0 +1,266 @@
+#!/bin/sh /etc/rc.common
+
+START=98
+STOP=14
+EXTRA_COMMANDS="recover verify"
+EXTRA_HELP="\trecover\tRun PassWall recovery immediately\n\tverify\tVerify the offline recovery repository"
+
+BASE="/etc/passwall-recovery"
+PACKAGES="$BASE/packages"
+DATA="$BASE/data"
+LOCK="/var/lock/passwall-recovery.lock"
+TAG="passwall-recovery"
+CHANGED=0
+CLOUD_DIRECT_CHANGED=0
+
+REQUIRED_PACKAGES="luci-app-passwall luci-i18n-passwall-zh-cn luci-compat luci-lib-jsonc xray-core coreutils-base64 coreutils-nohup coreutils-timeout chinadns-ng dns2socks microsocks tcping libyaml lyaml"
+MIN_PASSWALL_VERSION="26.8.1"
+MIN_XRAY_VERSION="26.7.11-r1"
+TARGET_ARCH="aarch64_cortex-a53_neon-vfpv4"
+PAYLOAD_ARCH="aarch64_cortex-a53"
+OPKG_ARCH_CONFIG="/etc/opkg/passwall-recovery.conf"
+
+log() {
+    logger -t "$TAG" "$*"
+    echo "$TAG: $*"
+}
+
+is_installed() {
+    opkg status "$1" 2>/dev/null | grep -q '^Status: install .* installed$'
+}
+
+installed_version() {
+    opkg status "$1" 2>/dev/null | sed -n 's/^Version: //p' | head -n 1
+}
+
+version_at_least() {
+    local installed
+    installed="$(installed_version "$1")"
+    [ -n "$installed" ] && opkg compare-versions "$installed" '>=' "$2"
+}
+
+verify() {
+    command -v sha256sum >/dev/null 2>&1 || {
+        log "sha256sum is unavailable"
+        return 1
+    }
+
+    cd "$BASE" && sha256sum -c SHA256SUMS || {
+        log "repository integrity check failed"
+        return 1
+    }
+
+    opkg print-architecture | grep -q "^arch $TARGET_ARCH " || {
+        log "unsupported router package architecture"
+        return 1
+    }
+    opkg print-architecture | grep -q "^arch $PAYLOAD_ARCH " || {
+        log "offline payload architecture is not registered"
+        return 1
+    }
+}
+
+ensure_opkg_architecture() {
+    opkg print-architecture | grep -q "^arch $TARGET_ARCH " || {
+        log "unsupported router package architecture"
+        return 1
+    }
+
+    if ! opkg print-architecture | grep -q "^arch $PAYLOAD_ARCH "; then
+        [ ! -L "$OPKG_ARCH_CONFIG" ] || {
+            log "opkg architecture config must not be a symlink"
+            return 1
+        }
+        printf '%s\n' "arch $PAYLOAD_ARCH 5" > "$OPKG_ARCH_CONFIG" || return 1
+        chmod 0644 "$OPKG_ARCH_CONFIG" || return 1
+    fi
+
+    opkg print-architecture | grep -q "^arch $PAYLOAD_ARCH " || {
+        log "cannot register the compatible payload architecture"
+        return 1
+    }
+}
+
+install_packages() {
+    local package missing=0
+    for package in $REQUIRED_PACKAGES; do
+        if ! is_installed "$package"; then
+            missing=1
+            log "package missing: $package"
+        fi
+    done
+
+    if ! version_at_least luci-app-passwall "$MIN_PASSWALL_VERSION"; then
+        missing=1
+        log "PassWall is older than $MIN_PASSWALL_VERSION"
+    fi
+
+    if ! version_at_least xray-core "$MIN_XRAY_VERSION"; then
+        missing=1
+        log "Xray is older than $MIN_XRAY_VERSION"
+    fi
+
+    if [ "$missing" -eq 0 ]; then
+        return 0
+    fi
+
+    log "installing PassWall from the offline repository"
+    opkg install "$PACKAGES"/*.ipk || return 1
+    CHANGED=1
+
+    for package in $REQUIRED_PACKAGES; do
+        is_installed "$package" || {
+            log "package installation incomplete: $package"
+            return 1
+        }
+    done
+
+
+    version_at_least luci-app-passwall "$MIN_PASSWALL_VERSION" || {
+        log "PassWall version check failed after installation"
+        return 1
+    }
+    version_at_least xray-core "$MIN_XRAY_VERSION" || {
+        log "Xray version check failed after installation"
+        return 1
+    }
+}
+
+netfilter_ready() {
+    iptables -m iprange -h >/dev/null 2>&1 &&
+        iptables -m socket -h >/dev/null 2>&1 &&
+        iptables -j TPROXY -h >/dev/null 2>&1
+}
+
+ensure_netfilter() {
+    netfilter_ready && return 0
+
+    log "installing firmware-matched netfilter modules from the GL.iNet feed"
+    opkg update || return 1
+    opkg install iptables-mod-iprange iptables-mod-tproxy || return 1
+    netfilter_ready || {
+        log "required iprange/socket/TPROXY kernel support is unavailable"
+        return 1
+    }
+}
+
+restore_data() {
+    mkdir -p /usr/share/v2ray /usr/share/xray
+
+    if ! cmp -s "$DATA/geoip-only-cn-private.dat" /usr/share/v2ray/geoip.dat; then
+        cp "$DATA/geoip-only-cn-private.dat" /usr/share/v2ray/geoip.dat
+        chmod 0644 /usr/share/v2ray/geoip.dat
+        CHANGED=1
+    fi
+
+    if ! cmp -s "$DATA/geosite.dat" /usr/share/v2ray/geosite.dat; then
+        cp "$DATA/geosite.dat" /usr/share/v2ray/geosite.dat
+        chmod 0644 /usr/share/v2ray/geosite.dat
+        CHANGED=1
+    fi
+
+    if [ "$(readlink /usr/share/xray/geoip.dat 2>/dev/null)" != "/usr/share/v2ray/geoip.dat" ]; then
+        rm -f /usr/share/xray/geoip.dat
+        ln -s /usr/share/v2ray/geoip.dat /usr/share/xray/geoip.dat || return 1
+        CHANGED=1
+    fi
+
+    if [ "$(readlink /usr/share/xray/geosite.dat 2>/dev/null)" != "/usr/share/v2ray/geosite.dat" ]; then
+        rm -f /usr/share/xray/geosite.dat
+        ln -s /usr/share/v2ray/geosite.dat /usr/share/xray/geosite.dat || return 1
+        CHANGED=1
+    fi
+}
+
+restore_cloud_direct() {
+    local source="$BASE/cloud-direct"
+
+    [ -f "$source/passwall-cloud-direct" ] || {
+        log "cloud direct-routing script is missing"
+        return 1
+    }
+    [ -f "$source/passwall-cloud-direct.init" ] || {
+        log "cloud direct-routing init script is missing"
+        return 1
+    }
+
+    if ! cmp -s "$source/passwall-cloud-direct" /usr/sbin/passwall-cloud-direct; then
+        cp "$source/passwall-cloud-direct" /usr/sbin/passwall-cloud-direct || return 1
+        chmod 0755 /usr/sbin/passwall-cloud-direct || return 1
+        CHANGED=1
+        CLOUD_DIRECT_CHANGED=1
+    fi
+    if ! cmp -s "$source/passwall-cloud-direct.init" /etc/init.d/passwall-cloud-direct; then
+        cp "$source/passwall-cloud-direct.init" /etc/init.d/passwall-cloud-direct || return 1
+        chmod 0755 /etc/init.d/passwall-cloud-direct || return 1
+        CHANGED=1
+        CLOUD_DIRECT_CHANGED=1
+    fi
+
+    /etc/init.d/passwall-cloud-direct enable >/dev/null 2>&1 || return 1
+}
+
+configure_services() {
+    uci -q set passwall.@global[0].enabled='1'
+    uci -q set passwall.@global_app[0].xray_file='/usr/bin/xray'
+    uci -q set passwall.@global_rules[0].v2ray_location_asset='/usr/share/v2ray/'
+    uci -q commit passwall
+
+    /etc/init.d/v2raya disable >/dev/null 2>&1 || true
+    /etc/init.d/v2raya-recovery disable >/dev/null 2>&1 || true
+    /etc/init.d/passwall enable >/dev/null 2>&1 || return 1
+}
+
+do_recover() {
+    local mode="$1"
+
+    if ! mkdir "$LOCK" 2>/dev/null; then
+        log "another recovery is already running"
+        return 0
+    fi
+    trap 'rmdir "$LOCK" 2>/dev/null' EXIT INT TERM
+
+    log "recovery check started"
+    ensure_opkg_architecture || return 1
+    verify || return 1
+    ensure_netfilter || return 1
+    install_packages || return 1
+    restore_data || return 1
+    restore_cloud_direct || return 1
+    configure_services || return 1
+
+    /usr/bin/xray version >/dev/null 2>&1 || {
+        log "xray binary check failed"
+        return 1
+    }
+    lua -e 'require "luci.controller.passwall"' >/dev/null 2>&1 || {
+        log "PassWall Lua module check failed"
+        return 1
+    }
+
+    rm -f /tmp/luci-indexcache /tmp/luci-indexcache.*
+    rm -rf /tmp/luci-modulecache/ 2>/dev/null
+
+    if [ "$mode" = "manual" ]; then
+        /etc/init.d/passwall restart || return 1
+    elif [ "$CHANGED" -eq 1 ]; then
+        /etc/init.d/passwall start || return 1
+    fi
+
+    if [ "$CLOUD_DIRECT_CHANGED" -eq 1 ]; then
+        /etc/init.d/passwall-cloud-direct restart || return 1
+    else
+        /etc/init.d/passwall-cloud-direct start >/dev/null 2>&1 || return 1
+    fi
+    /usr/sbin/passwall-cloud-direct sync || return 1
+
+    log "recovery check completed"
+}
+
+recover() {
+    do_recover manual
+}
+
+start() {
+    do_recover boot
+}

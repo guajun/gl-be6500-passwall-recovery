@@ -1,0 +1,27 @@
+# Never commit router identity, credentials, or runtime configuration.
+authorized_keys
+id_*
+*.key
+*.pem
+*.p12
+*.pfx
+*.db
+*.sqlite*
+
+# PassWall UCI files can contain subscription URLs and node credentials.
+etc/config/passwall
+etc/config/passwall_server
+config/passwall
+config/passwall_server
+
+# Keep third-party offline payloads out of Git. Their hashes are tracked instead.
+*.ipk
+*.dat
+offline-repository/packages/
+offline-repository/data/
+
+# Local/editor files.
+.DS_Store
+Thumbs.db
+*.swp
+dist/

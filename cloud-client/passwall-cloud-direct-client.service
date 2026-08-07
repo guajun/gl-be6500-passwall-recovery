@@ -1,0 +1,11 @@
+[Unit]
+Description=Renew this cloud host's PassWall direct-routing lease
+Wants=network-online.target
+After=network-online.target zerotier-one.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/passwall-cloud-direct-register
+
+[Install]
+WantedBy=multi-user.target
