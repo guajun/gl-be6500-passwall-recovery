@@ -30,7 +30,7 @@ Run this as `root` on a GL-BE6500. Git and SSH agent forwarding are not
 required:
 
 ```sh
-uclient-fetch -qO- https://raw.githubusercontent.com/guajun/gl-be6500-passwall-recovery/v1.0.0/installer.sh | sh
+uclient-fetch -qO- https://raw.githubusercontent.com/guajun/gl-be6500-passwall-recovery/v1.0.1/installer.sh | sh
 ```
 
 The versioned installer verifies the GL-BE6500 model, IPQ5332 board, and native
@@ -49,7 +49,7 @@ active GL.iNet firmware feed so their versions match the running kernel.
 To test only the download and verification path:
 
 ```sh
-uclient-fetch -qO- https://raw.githubusercontent.com/guajun/gl-be6500-passwall-recovery/v1.0.0/installer.sh | sh -s -- --verify-only
+uclient-fetch -qO- https://raw.githubusercontent.com/guajun/gl-be6500-passwall-recovery/v1.0.1/installer.sh | sh -s -- --verify-only
 ```
 
 ## Files on the router

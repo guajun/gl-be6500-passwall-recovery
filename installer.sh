@@ -2,10 +2,10 @@
 
 set -eu
 
-VERSION="v1.0.0"
+VERSION="v1.0.1"
 REPOSITORY="guajun/gl-be6500-passwall-recovery"
-ASSET="gl-be6500-passwall-recovery-v1.0.0.tar.gz"
-ARCHIVE_SHA256="de467560a9f561a45fd33c5e9403f8310d1db6bc66af0fa9564d341f8a17ab61"
+ASSET="gl-be6500-passwall-recovery-v1.0.1.tar.gz"
+ARCHIVE_SHA256="ef6bd1273f2cf8fe4f40cfbccfe854e12ca25c76eb45566b2f6070cd5ab98486"
 
 VERIFY_ONLY=0
 WORKDIR=""
@@ -139,7 +139,12 @@ install_opkg_arch_config() {
         cp -p "$OPKG_ARCH_CONFIG" "$WORKDIR/passwall-recovery.opkg.backup"
     fi
 
-    printf '%s\n' 'arch aarch64_cortex-a53 5' > "$WORKDIR/passwall-recovery.opkg.conf"
+    printf '%s\n' \
+        'arch all 1' \
+        'arch noarch 1' \
+        'arch aarch64_cortex-a53 5' \
+        'arch aarch64_cortex-a53_neon-vfpv4 10' \
+        > "$WORKDIR/passwall-recovery.opkg.conf"
     cp "$WORKDIR/passwall-recovery.opkg.conf" "$OPKG_ARCH_CONFIG"
     chmod 0644 "$OPKG_ARCH_CONFIG"
     opkg print-architecture | grep -q '^arch aarch64_cortex-a53 ' ||

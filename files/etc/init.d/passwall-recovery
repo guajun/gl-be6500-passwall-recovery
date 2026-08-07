@@ -71,7 +71,12 @@ ensure_opkg_architecture() {
             log "opkg architecture config must not be a symlink"
             return 1
         }
-        printf '%s\n' "arch $PAYLOAD_ARCH 5" > "$OPKG_ARCH_CONFIG" || return 1
+        printf '%s\n' \
+            'arch all 1' \
+            'arch noarch 1' \
+            "arch $PAYLOAD_ARCH 5" \
+            "arch $TARGET_ARCH 10" \
+            > "$OPKG_ARCH_CONFIG" || return 1
         chmod 0644 "$OPKG_ARCH_CONFIG" || return 1
     fi
 
