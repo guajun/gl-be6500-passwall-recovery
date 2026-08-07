@@ -142,7 +142,7 @@ ensure_netfilter() {
 
     log "installing firmware-matched netfilter modules from the GL.iNet feed"
     opkg update || return 1
-    opkg install iptables-mod-iprange iptables-mod-tproxy || return 1
+    opkg install iptables-mod-iprange iptables-mod-socket iptables-mod-tproxy || return 1
     netfilter_ready || {
         log "required iprange/socket/TPROXY kernel support is unavailable"
         return 1

@@ -5,7 +5,7 @@ set -euo pipefail
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 base_archive="${1:-}"
 output_dir="${2:-$repo_dir/dist}"
-version="${3:-v1.0.1}"
+version="${3:-v1.0.2}"
 workdir=""
 
 die() {
