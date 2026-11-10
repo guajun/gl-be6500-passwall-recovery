@@ -206,7 +206,7 @@ restore_cloud_direct() {
 }
 
 configure_services() {
-    uci -q set passwall.@global[0].enabled='1'
+    # Preserve the configured main switch across recovery.
     uci -q set passwall.@global_app[0].xray_file='/usr/bin/xray'
     uci -q set passwall.@global_rules[0].v2ray_location_asset='/usr/share/v2ray/'
     uci -q commit passwall

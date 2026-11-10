@@ -14,12 +14,27 @@ At boot, `passwall-recovery`:
 2. installs missing PassWall user-space packages from that payload;
 3. installs firmware-matched netfilter modules from the GL.iNet package feed;
 4. restores the Xray geo data and symlinks;
-5. enables PassWall and starts it only when recovery changed the installation.
+5. registers the PassWall init service and starts it only when recovery changed
+   the installation, while preserving the configured PassWall main switch.
+
+Boot recovery, manual `recover`, and installation must preserve
+`passwall.@global[0].enabled`. A user who disables the proxy in LuCI must not
+have it enabled again by recovery. Registering the init service with
+`/etc/init.d/passwall enable` controls its boot registration; the separate UCI
+main switch still determines whether PassWall starts the proxy. If the main
+switch is absent, recovery leaves the package's default behavior in place.
 
 It also restores the `passwall-cloud-direct` service. That service keeps
 short-lived public IPv4 leases in a dedicated `pwr_cloud_direct` ipset and
 places matching `RETURN` rules before PassWall's TCP redirect and UDP TPROXY
 rules. It does not edit subscriptions, proxy nodes, or PassWall's rule files.
+
+Cloud direct routing applies only to the public IP addresses registered by
+cloud clients. It does not create LAN-device bypass rules for applications
+such as remote desktop software. In PassWall, a per-device ACL marked enabled
+also requires the global access-control switch (`acl_enable`) to be enabled.
+Check the active firewall rules as well as the saved ACL configuration when
+diagnosing whether traffic is being proxied.
 
 Kernel packages are intentionally not stored offline. Their versions must match
 the kernel in the newly installed firmware.
@@ -32,6 +47,12 @@ required:
 ```sh
 uclient-fetch -qO- https://raw.githubusercontent.com/guajun/gl-be6500-passwall-recovery/v1.0.2/installer.sh | sh
 ```
+
+The commands here are pinned to `v1.0.2`, which predates the main-switch
+preservation fix. That release still enables the main switch during recovery.
+Updating the source alone does not change the pinned release archive; a new
+release and matching installer version and archive digest are required before
+these commands can distribute the fix.
 
 The versioned installer verifies the GL-BE6500 model, IPQ5332 board, and native
 `aarch64_cortex-a53_neon-vfpv4` package architecture, checks the release archive
@@ -155,3 +176,14 @@ Manual verification and recovery:
 This repository intentionally excludes `/etc/config/passwall`, subscription
 data, node credentials, SSH keys, databases, logs, and router backups. The
 `.gitignore` also blocks the common paths and file types for those values.
+
+## Tests
+
+The shell tests use temporary directories and mocked router commands; they do
+not change the host's services or router configuration:
+
+```sh
+sh tests/test-recovery.sh
+sh tests/test-cloud-direct.sh
+bash tests/test-cloud-client.sh
+```
