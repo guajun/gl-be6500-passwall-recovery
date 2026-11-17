@@ -5,7 +5,7 @@ set -euo pipefail
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 base_archive="${1:-}"
 output_dir="${2:-$repo_dir/dist}"
-version="${3:-v1.0.2}"
+version="${3:-v1.0.3}"
 workdir=""
 
 die() {
@@ -42,6 +42,11 @@ cp "$repo_dir/files/etc/passwall-recovery/README.txt" "$workdir/router/etc/passw
 rm -rf -- "$workdir/router/etc/passwall-recovery/cloud-direct"
 cp -a "$repo_dir/files/etc/passwall-recovery/cloud-direct" "$workdir/router/etc/passwall-recovery/cloud-direct"
 cp "$repo_dir/offline-repository/SHA256SUMS" "$workdir/router/etc/passwall-recovery/SHA256SUMS"
+chmod 0644 "$workdir/router/etc/passwall-recovery/README.txt" \
+  "$workdir/router/etc/passwall-recovery/SHA256SUMS" \
+  "$workdir/router/etc/passwall-recovery/cloud-direct/README.txt"
+chmod 0755 "$workdir/router/etc/passwall-recovery/cloud-direct/passwall-cloud-direct" \
+  "$workdir/router/etc/passwall-recovery/cloud-direct/passwall-cloud-direct.init"
 
 (
   cd "$workdir/router/etc/passwall-recovery"
@@ -60,6 +65,8 @@ for file in passwall-cloud-direct-register passwall-cloud-direct-client.service 
   cp "$repo_dir/cloud-client/$file" "$workdir/client/$file"
 done
 chmod 0755 "$workdir/client/passwall-cloud-direct-register"
+chmod 0644 "$workdir/client/passwall-cloud-direct-client.service" \
+  "$workdir/client/passwall-cloud-direct-client.timer"
 client_name="passwall-cloud-direct-client-$version.tar.gz"
 tar --sort=name --mtime='UTC 2020-01-01' --owner=0 --group=0 --numeric-owner \
   -czf "$output_dir/$client_name" -C "$workdir/client" \

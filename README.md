@@ -45,14 +45,12 @@ Run this as `root` on a GL-BE6500. Git and SSH agent forwarding are not
 required:
 
 ```sh
-uclient-fetch -qO- https://raw.githubusercontent.com/guajun/gl-be6500-passwall-recovery/v1.0.2/installer.sh | sh
+uclient-fetch -qO- https://raw.githubusercontent.com/guajun/gl-be6500-passwall-recovery/v1.0.3/installer.sh | sh
 ```
 
-The commands here are pinned to `v1.0.2`, which predates the main-switch
-preservation fix. That release still enables the main switch during recovery.
-Updating the source alone does not change the pinned release archive; a new
-release and matching installer version and archive digest are required before
-these commands can distribute the fix.
+The commands here target `v1.0.3`, which preserves the proxy main switch. They
+become usable once that release is published. The older `v1.0.2` installer and
+archive still force the switch on; do not reinstall them over this fix.
 
 The versioned installer verifies the GL-BE6500 model, IPQ5332 board, and native
 `aarch64_cortex-a53_neon-vfpv4` package architecture, checks the release archive
@@ -70,7 +68,7 @@ active GL.iNet firmware feed so their versions match the running kernel.
 To test only the download and verification path:
 
 ```sh
-uclient-fetch -qO- https://raw.githubusercontent.com/guajun/gl-be6500-passwall-recovery/v1.0.2/installer.sh | sh -s -- --verify-only
+uclient-fetch -qO- https://raw.githubusercontent.com/guajun/gl-be6500-passwall-recovery/v1.0.3/installer.sh | sh -s -- --verify-only
 ```
 
 ## Files on the router
@@ -187,3 +185,17 @@ sh tests/test-recovery.sh
 sh tests/test-cloud-direct.sh
 bash tests/test-cloud-client.sh
 ```
+
+GitHub Actions runs the recovery and router tests with dash, bash, and BusyBox
+ash, and the cloud client test with bash.
+
+To prepare the release from the verified `v1.0.2` payload:
+
+```sh
+bash scripts/build-release.sh /path/to/gl-be6500-passwall-recovery-v1.0.2.tar.gz dist/v1.0.3 v1.0.3
+bash tests/test-release.sh dist/v1.0.3
+```
+
+Publish both archives and their `.sha256` files with the standalone
+`cloud-client/install.sh` asset named `install-cloud-direct-client.sh`. Both
+installers pin the new archive names and SHA-256 digests.
