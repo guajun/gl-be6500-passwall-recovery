@@ -2,10 +2,10 @@
 
 set -eu
 
-VERSION="v1.0.2"
+VERSION="v1.0.3"
 REPOSITORY="guajun/gl-be6500-passwall-recovery"
-ASSET="gl-be6500-passwall-recovery-v1.0.2.tar.gz"
-ARCHIVE_SHA256="2e6d96bae0278b4b3dd1eb8b3c3ee0e57b2902acae5a9be591c3223803dfd8c5"
+ASSET="gl-be6500-passwall-recovery-v1.0.3.tar.gz"
+ARCHIVE_SHA256="4c1dcefc76cb57ea23916efce6038ad50e246801111d3386f8995149f6fc00bb"
 
 VERIFY_ONLY=0
 WORKDIR=""

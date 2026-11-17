@@ -34,7 +34,7 @@ output="$(
   IDENTITY_FILE="$workdir/id_ed25519" \
   KNOWN_HOSTS_FILE="$workdir/known_hosts" \
   SSH_TEST_LOG="$workdir/ssh.log" \
-  "$repo_dir/cloud-client/passwall-cloud-direct-register"
+  bash "$repo_dir/cloud-client/passwall-cloud-direct-register"
 )"
 
 grep -q 'registered hk 47.57.180.218' <<<"$output"

@@ -1,8 +1,9 @@
 PassWall offline recovery repository for GL-BE6500.
 
 The init service runs before PassWall at boot. It verifies SHA256SUMS, restores
-missing user-space packages, restores the compact geo data files, and enables
-PassWall. Kernel packages are intentionally not stored because their versions
+missing user-space packages, restores the compact geo data files, and registers
+the PassWall init service while preserving the configured proxy main switch.
+Kernel packages are intentionally not stored because their versions
 must match the firmware kernel after a sysupgrade.
 
 Manual checks:

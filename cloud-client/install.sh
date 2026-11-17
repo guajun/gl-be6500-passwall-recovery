@@ -7,9 +7,9 @@ ROUTER_HOST=""
 ROUTER_PORT="22"
 SOURCE_DIR=""
 START_TIMER=1
-VERSION="v1.0.2"
+VERSION="v1.0.3"
 REPOSITORY="guajun/gl-be6500-passwall-recovery"
-ASSET="passwall-cloud-direct-client-v1.0.2.tar.gz"
+ASSET="passwall-cloud-direct-client-v1.0.3.tar.gz"
 ARCHIVE_SHA256="273d47666b8b77b8c6dac4aba69f6d24bccf8dae56eeeff7a56633a7600f0936"
 WORKDIR=""
 
